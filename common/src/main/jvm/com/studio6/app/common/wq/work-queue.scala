@@ -276,7 +276,15 @@ abstract class RedisWorkQueueWorker[T](
   })
 
   def start(): Unit = executor.submit(this)
-  def stop(): Unit = executor.shutdown()
+
+  def stop(): Unit = {
+    println("stopping...")
+    log.info("stopping")
+    executor.shutdownNow().foreach(r => {
+      //log.info("{}", r)
+      println(r)
+    })
+  }
 
   def blockingProcessNext() = {
     withJedis(jedis => {

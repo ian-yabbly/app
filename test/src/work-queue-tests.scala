@@ -6,51 +6,82 @@ import com.studio6.app.common.wq._
 
 import redis.clients.jedis.JedisPool
 
-import scala.concurrent.ExecutionContext.Implicits.global
+import java.util.concurrent._
+import java.util.concurrent.TimeUnit._
 
 val jedisPool = new JedisPool("localhost", 6379)
-val qconfig = WorkQueueConfig(maxAttempts = 4)
 val qname = "test"
-
 val redisClient = new RedisClientImpl(jedisPool, 0, 32)
 
-val wq = new RedisWorkQueueWorker[String](qname, qconfig, redisClient) {
-  override def deserialize(bytes: Array[Byte]) = new String(bytes, "utf-8")
-  override def process(item: String) = {
-    //if (true) sys.error("Fail")
-    println("Processing \"%s\"".format(item))
+object Test {
+  val ThreadCount = 4
+  val IterationCount = 128
+
+  val worker = new RedisWorkQueueWorker[String](qname, redisClient, 1000, 2, 1000) {
+    override def deserialize(bytes: Array[Byte]) = new String(bytes, "utf-8")
+    override def process(item: String) = {
+      val l = item.length
+    }
+  }
+
+  def main(args: Array[String]): Unit = {
+    val executor = Executors.newFixedThreadPool(ThreadCount)
+    val wqClient = new RedisWorkQueueClient(redisClient)
+    wqClient.delete(qname)
+
+    assert(wqClient.size(qname) == 0)
+    assert(wqClient.inProgressSize(qname) == 0)
+    assert(wqClient.failSize(qname) == 0)
+
+    worker.start()
+
+    try {
+      0.until(ThreadCount).foreach(i => {
+        executor.submit(new Runnable {
+          override def run(): Unit = {
+            try {
+              0.until(IterationCount).foreach(j => {
+                print('.')
+                wqClient.submit(qname, "item".toUtf8Bytes)
+              })
+            } catch {
+              case e: Exception => e.printStackTrace
+            }
+          }
+        })
+      })
+
+      executor.shutdown()
+      executor.awaitTermination(1l, MINUTES)
+      println
+    } catch {
+      case e: Exception => e.printStackTrace
+    }
+
+    var pending = wqClient.size(qname)
+    while (pending > 0) {
+      Thread.sleep(100)
+      val newPending = wqClient.size(qname)
+      if (newPending >= pending) {
+        sys.error(s"Pending count grew [$pending] [$newPending]")
+      }
+      pending = newPending
+    }
+
+    assert(wqClient.size(qname) == 0)
+    assert(wqClient.inProgressSize(qname) == 0)
+    assert(wqClient.failSize(qname) == 0)
+
+    println("Stopping worker...")
+    worker.stop()
+    println("Worker stopped")
+
+    wqClient.stop()
+    println("Client stopped")
   }
 }
 
-
-val wqClient = new RedisWorkQueueClient(redisClient)
-wqClient.delete(qname)
+Test.main(args)
 
 //val delayedWorker = new DelayedItemWorker(wqClient)
 //delayedWorker.start()
-
-assert(wqClient.size(qname) == 0)
-assert(wqClient.inProgressSize(qname) == 0)
-assert(wqClient.failSize(qname) == 0)
-
-val itemCount = 10
-
-0.until(itemCount) foreach { i => {
-  wqClient.submit(qname, i.toString.toUtf8Bytes, 10)
-}}
-
-assert(wqClient.failSize(qname) == 0)
-
-wq.start()
-
-Thread.sleep(1000 + (itemCount * 6))
-
-//delayedWorker.stop()
-
-assert(wqClient.size(qname) == 0)
-assert(wqClient.inProgressSize(qname) == 0)
-assert(wqClient.failSize(qname) == 0)
-
-wqClient.stop()
-
-println("done")
