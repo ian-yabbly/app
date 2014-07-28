@@ -8,7 +8,13 @@ object implicits {
 }
 
 trait ExecutionContextHelper {
-  def inContext[T](contextAttributes: Map[String, Any] = Map.empty)(fn: => T) = {
+
+  def inContext[T](contextAttributes: (String, Any)*)(fn: => T): T = {
+    val cas: Map[String, Any] = Map(contextAttributes: _*)
+    inContext(cas)(fn)
+  }
+
+  def inContext[T](contextAttributes: Map[String, Any] = Map.empty)(fn: => T): T = {
     val ctx = ExecutionContext.getOrCreate().setAttributes(contextAttributes)
     ctx.incRefCount()
     try {
@@ -21,7 +27,7 @@ trait ExecutionContextHelper {
     }
   }
 
-  def withContext[T](fn: ExecutionContext => T) = {
+  def withContext[T](fn: ExecutionContext => T): T = {
     val ctx = ExecutionContext.getOrCreate()
     ctx.incRefCount()
     try {
@@ -33,6 +39,8 @@ trait ExecutionContextHelper {
       }
     }
   }
+
+  def optionalContext(): Option[ExecutionContext] = ExecutionContext.optional()
 }
 
 object ExecutionContext {
@@ -86,6 +94,15 @@ class ExecutionContext(private val attributes: mutable.Map[String, Any] = mutabl
   def setAttributes(attrs: Map[String, Any]): ExecutionContext = {
     attrs.foreach(t => setAttribute(t._1, t._2))
     this
+  }
+
+  def appendAttribute(name: String, value: Any): ExecutionContext = {
+    attributes.get(name) match {
+      case Some(vs) => vs match {
+        case vs: Seq[Any] => setAttribute(name, vs :+ value)
+      }
+      case None => setAttribute(name, Seq(value))
+    }
   }
 
   def optionalAttribute(name: String): Option[Any] = attributes.get(name)
